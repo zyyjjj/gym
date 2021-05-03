@@ -94,6 +94,8 @@ class CartPoleEnv(gym.Env):
         self.state = None
 
         self.steps_beyond_done = None
+        
+        #self.subtask_1_rewardc = 0
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -126,6 +128,10 @@ class CartPoleEnv(gym.Env):
             theta = theta + self.tau * theta_dot
 
         self.state = (x, x_dot, theta, theta_dot)
+        
+        #subtask_1_reward = 0
+        #if (theta > -0.5 * self.theta_threshold_radians and theta < 0.5 * self.theta_threshold_radians):
+        #    subtask_1_reward = 1
 
         done = bool(
             x < -self.x_threshold
@@ -133,9 +139,11 @@ class CartPoleEnv(gym.Env):
             or theta < -self.theta_threshold_radians
             or theta > self.theta_threshold_radians
         )
+        
 
         if not done:
             reward = 1.0
+            
         elif self.steps_beyond_done is None:
             # Pole just fell!
             self.steps_beyond_done = 0
@@ -146,12 +154,13 @@ class CartPoleEnv(gym.Env):
                     "You are calling 'step()' even though this "
                     "environment has already returned done = True. You "
                     "should always call 'reset()' once you receive 'done = "
-                    "True' -- any further steps are undefined behavior."
-                )
+                    "True' -- any further steps are undefined behavior.")
             self.steps_beyond_done += 1
             reward = 0.0
 
-        return np.array(self.state), reward, done, {}
+        information = {'subtask_1': int(bool(theta > -0.5 * self.theta_threshold_radians and theta < 0.5 * self.theta_threshold_radians))}
+
+        return np.array(self.state), reward, done, information
 
     def reset(self):
         self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
