@@ -22,7 +22,7 @@ from stable_baselines3.common.type_aliases import GymObs, GymStepReturn
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
 from stable_baselines3.common import logger
 from stable_baselines3 import A2C, SAC, PPO, TD3
-from stable_baselines.common.vec_env import VecEnv, sync_envs_normalization, DummyVecEnv
+from stable_baselines3.common.vec_env import VecEnv, sync_envs_normalization, DummyVecEnv
 
 #if typing.TYPE_CHECKING:
 #    from stable_baselines.common.base_class import BaseRLModel
@@ -180,7 +180,10 @@ def evaluate_policy(
     if isinstance(env, VecEnv):
         assert env.num_envs == 1, "You must pass only one environment when using this function"
 
-    is_recurrent = model.policy.recurrent
+    if hasattr(model.policy, 'recurrent'):
+        is_recurrent = model.policy.recurrent
+    else:
+        is_recurrent = False
 
     episode_rewards, episode_lengths, episode_infos = [], [], []
 
@@ -201,6 +204,7 @@ def evaluate_policy(
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
             new_obs, reward, done, _info = env.step(action)
+            # BUG here
             episode_info += np.asarray(list(_info.values()))
             if is_recurrent:
                 obs[0, :] = new_obs
