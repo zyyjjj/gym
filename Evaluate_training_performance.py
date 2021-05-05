@@ -10,23 +10,143 @@ __all__ = ["Monitor", "ResultsWriter", "get_monitor_files", "load_results"]
 import csv
 import json
 import os
-import time
 from glob import glob
 from typing import Dict, List, Optional, Tuple, Union, Callable
 
 import gym
 import numpy as np
 import pandas
+import warnings
 
 from stable_baselines3.common.type_aliases import GymObs, GymStepReturn
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EventCallback
 from stable_baselines3.common import logger
 from stable_baselines3 import A2C, SAC, PPO, TD3
-from stable_baselines.common.vec_env import VecEnv
+from stable_baselines.common.vec_env import VecEnv, sync_envs_normalization, DummyVecEnv
 
 #if typing.TYPE_CHECKING:
 #    from stable_baselines.common.base_class import BaseRLModel
 
+
+class EvalCallback(EventCallback):
+    """
+    Callback for evaluating an agent.
+
+    :param eval_env: (Union[gym.Env, VecEnv]) The environment used for initialization
+    :param callback_on_new_best: (Optional[BaseCallback]) Callback to trigger
+        when there is a new best model according to the `mean_reward`
+    :param n_eval_episodes: (int) The number of episodes to test the agent
+    :param eval_freq: (int) Evaluate the agent every eval_freq call of the callback.
+    :param log_path: (str) Path to a folder where the evaluations (`evaluations.npz`)
+        will be saved. It will be updated at each evaluation.
+    :param best_model_save_path: (str) Path to a folder where the best model
+        according to performance on the eval env will be saved.
+    :param deterministic: (bool) Whether the evaluation should
+        use a stochastic or deterministic actions.
+    :param render: (bool) Whether to render or not the environment during evaluation
+    :param verbose: (int)
+    """
+    def __init__(self, eval_env: Union[gym.Env, VecEnv],
+                 callback_on_new_best: Optional[BaseCallback] = None,
+                 n_eval_episodes: int = 5,
+                 eval_freq: int = 10000,
+                 log_path: str = None,
+                 best_model_save_path: str = None,
+                 deterministic: bool = True,
+                 render: bool = False,
+                 verbose: int = 1):
+        super(EvalCallback, self).__init__(callback_on_new_best, verbose=verbose)
+        self.n_eval_episodes = n_eval_episodes
+        self.eval_freq = eval_freq
+        self.best_mean_reward = -np.inf
+        self.last_mean_reward = -np.inf
+        self.deterministic = deterministic
+        self.render = render
+
+        # Convert to VecEnv for consistency
+        if not isinstance(eval_env, VecEnv):
+            eval_env = DummyVecEnv([lambda: eval_env])
+
+        assert eval_env.num_envs == 1, "You must pass only one environment for evaluation"
+
+        self.eval_env = eval_env
+        self.best_model_save_path = best_model_save_path
+        # Logs will be written in `evaluations.npz`
+        if log_path is not None:
+            log_path = os.path.join(log_path, 'evaluations')
+        self.log_path = log_path
+        self.evaluations_results = []
+        self.evaluations_timesteps = []
+        self.evaluations_length = []
+        self.evaluations_infos = []
+
+    def _init_callback(self):
+        # Does not work in some corner cases, where the wrapper is not the same
+        if not type(self.training_env) is type(self.eval_env):
+            warnings.warn("Training and eval env are not of the same type"
+                          "{} != {}".format(self.training_env, self.eval_env))
+
+        # Create folders if needed
+        if self.best_model_save_path is not None:
+            os.makedirs(self.best_model_save_path, exist_ok=True)
+        if self.log_path is not None:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+
+    def _on_step(self) -> bool:
+
+        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            # Sync training and eval env if there is VecNormalize
+            sync_envs_normalization(self.training_env, self.eval_env)
+
+
+            # TODO: change evaluate_policy output
+            episode_rewards, episode_lengths, episode_infos, info_names \
+                = evaluate_policy(self.model, self.eval_env,
+                                  n_eval_episodes=self.n_eval_episodes,
+                                  render=self.render,
+                                  deterministic=self.deterministic,
+                                  return_episode_rewards=True)
+
+            if self.log_path is not None:
+                self.evaluations_timesteps.append(self.num_timesteps)
+                self.evaluations_results.append(episode_rewards)
+                self.evaluations_length.append(episode_lengths)
+                self.evaluations_infos.append(episode_infos)
+                
+                
+                np.savez(self.log_path, timesteps=self.evaluations_timesteps,
+                         results=self.evaluations_results, 
+                         ep_lengths=self.evaluations_length,
+                         infos = self.evaluations_infos
+                         )
+
+            mean_reward, std_reward = np.mean(episode_rewards), np.std(episode_rewards)
+            mean_ep_length, std_ep_length = np.mean(episode_lengths), np.std(episode_lengths)
+            # Keep track of the last evaluation, useful for classes that derive from this callback
+            self.last_mean_reward = mean_reward
+
+
+            # TODO: also process the episode_infos to return components in the info
+            # i.e., names, and aggregate statistics
+
+            if self.verbose > 0:
+                print("Eval num_timesteps={}, "
+                      "episode_reward={:.2f} +/- {:.2f}".format(self.num_timesteps, mean_reward, std_reward))
+                print("Episode length: {:.2f} +/- {:.2f}".format(mean_ep_length, std_ep_length))
+                for i in range(len(info_names)):
+                    print("Episode info: {}, output: {:.2f}".format(info_names[i], episode_infos[i]))
+
+            if mean_reward > self.best_mean_reward:
+                if self.verbose > 0:
+                    print("New best mean reward!")
+                if self.best_model_save_path is not None:
+                    self.model.save(os.path.join(self.best_model_save_path, 'best_model'))
+                self.best_mean_reward = mean_reward
+                # Trigger callback if needed
+                if self.callback is not None:
+                    return self._on_event()
+
+        return True
 
 def evaluate_policy(
     model,#: "BaseRLModel",
@@ -62,7 +182,8 @@ def evaluate_policy(
 
     is_recurrent = model.policy.recurrent
 
-    episode_rewards, episode_lengths = [], []
+    episode_rewards, episode_lengths, episode_infos = [], [], []
+
     for i in range(n_eval_episodes):
         # Avoid double reset, as VecEnv are reset automatically
         if not isinstance(env, VecEnv) or i == 0:
@@ -76,9 +197,11 @@ def evaluate_policy(
         done, state = False, None
         episode_reward = 0.0
         episode_length = 0
+        episode_info = 0
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
             new_obs, reward, done, _info = env.step(action)
+            episode_info += np.asarray(list(_info.values()))
             if is_recurrent:
                 obs[0, :] = new_obs
             else:
@@ -89,16 +212,18 @@ def evaluate_policy(
             episode_length += 1
             if render:
                 env.render()
+        info_names = list(_info.keys())
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
-        # TODO: also store _info
+        episode_infos.append(episode_info)
+                
     mean_reward = np.mean(episode_rewards)
     std_reward = np.std(episode_rewards)
     if reward_threshold is not None:
         assert mean_reward > reward_threshold, "Mean reward below threshold: {:.2f} < {:.2f}".format(mean_reward, reward_threshold)
     if return_episode_rewards:
-        return episode_rewards, episode_lengths
-    # TODO: have it return list of main and sub rewards
+        return episode_rewards, episode_lengths, episode_infos, info_names
+
     return mean_reward, std_reward
 
 
