@@ -17,6 +17,7 @@ import gym
 import numpy as np
 import pandas
 import warnings
+import time
 
 from stable_baselines3.common.type_aliases import GymObs, GymStepReturn
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
@@ -97,9 +98,8 @@ class EvalCallback(EventCallback):
         if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
             # Sync training and eval env if there is VecNormalize
             sync_envs_normalization(self.training_env, self.eval_env)
-
-
-            # TODO: change evaluate_policy output
+            
+            # changed evaluate policy output
             episode_rewards, episode_lengths, episode_infos, info_names \
                 = evaluate_policy(self.model, self.eval_env,
                                   n_eval_episodes=self.n_eval_episodes,
@@ -126,7 +126,7 @@ class EvalCallback(EventCallback):
             self.last_mean_reward = mean_reward
 
 
-            # TODO: also process the episode_infos to return components in the info
+            # also process the episode_infos to return components in the info
             # i.e., names, and aggregate statistics
 
             if self.verbose > 0:
@@ -152,6 +152,7 @@ def evaluate_policy(
     model,#: "BaseRLModel",
     env: Union[gym.Env, VecEnv],
     n_eval_episodes: int = 10,
+    sim_steps_upper_bound: int = 1000,
     deterministic: bool = True,
     render: bool = False,
     callback: Optional[Callable] = None,
@@ -204,8 +205,9 @@ def evaluate_policy(
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
             new_obs, reward, done, _info = env.step(action)
-            # BUG here
+            #print(_info)
             episode_info += np.asarray(list(_info.values()))
+            #episode_info += np.asarray(list(_info[0].values()))
             if is_recurrent:
                 obs[0, :] = new_obs
             else:
@@ -216,6 +218,8 @@ def evaluate_policy(
             episode_length += 1
             if render:
                 env.render()
+            
+            done = bool(episode_length > sim_steps_upper_bound)
         info_names = list(_info.keys())
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
