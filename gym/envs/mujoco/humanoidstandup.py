@@ -34,7 +34,11 @@ class HumanoidStandupEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #print('subtask_1_reward', mass_center(self.model, self.sim))
 
         done = bool(False)
-        return self._get_obs(), reward, done, dict(reward_linup=uph_cost, reward_quadctrl=-quad_ctrl_cost, reward_impact=-quad_impact_cost, subtask_1 = subtask_1_reward)
+        return self._get_obs(), reward, done, \
+            dict(reward_linup=uph_cost, 
+                 reward_quadctrl=-quad_ctrl_cost, 
+                 reward_impact=-quad_impact_cost, 
+                 subtask_1 = subtask_1_reward)
 
     def reset_model(self):
         c = 0.01
