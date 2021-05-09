@@ -20,10 +20,12 @@ class HumanoidStandupEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                                data.cfrc_ext.flat])
 
     def step(self, a):
+        pos_before = self.sim.data.qpos[2]
         self.do_simulation(a, self.frame_skip)
         pos_after = self.sim.data.qpos[2]
         data = self.sim.data
         uph_cost = (pos_after - 0) / self.model.opt.timestep
+        up_vel = (pos_after - pos_before) / self.model.opt.timestep
 
         quad_ctrl_cost = 0.1 * np.square(data.ctrl).sum()
         quad_impact_cost = .5e-6 * np.square(data.cfrc_ext).sum()
@@ -32,13 +34,15 @@ class HumanoidStandupEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #print(reward)
         subtask_1_reward = mass_center(self.model, self.sim)
         #print('subtask_1_reward', mass_center(self.model, self.sim))
+        subtask_2_reward = up_vel
 
         done = bool(False)
         return self._get_obs(), reward, done, \
             dict(reward_linup=uph_cost, 
                  reward_quadctrl=-quad_ctrl_cost, 
                  reward_impact=-quad_impact_cost, 
-                 subtask_1 = subtask_1_reward)
+                 subtask_1 = subtask_1_reward,
+                 subtask_2 = subtask_2_reward)
 
     def reset_model(self):
         c = 0.01
