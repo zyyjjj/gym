@@ -15,8 +15,9 @@ class HalfCheetahEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         reward_ctrl = - 0.1 * np.square(action).sum()
         reward_run = (xposafter - xposbefore)/self.dt
         reward = reward_ctrl + reward_run
+        subtask_1_reward = self.sim.data.qvel[3] + self.sim.data.qvel[6]
         done = False
-        return ob, reward, done, dict(reward_run=reward_run, reward_ctrl=reward_ctrl)
+        return ob, reward, done, dict(reward_run=reward_run, reward_ctrl=reward_ctrl, subtask_1 = subtask_1_reward)
 
     def _get_obs(self):
         return np.concatenate([
