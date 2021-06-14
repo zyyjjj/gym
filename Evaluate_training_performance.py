@@ -87,8 +87,6 @@ def evaluate_policy(
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
             new_obs, reward, done, _info = env.step(action)
-            #print(_info)
-            #episode_info = np.asarray(list(_info.values()))
             episode_info.append(list(_info[0].values()))
             if is_recurrent:
                 obs[0, :] = new_obs
@@ -118,7 +116,41 @@ def evaluate_policy(
 
 # function for parsing arguments passed to the hyperparameters
 
-# function for creating the Cartesian product of values for each hyperparameter
+def parse_hp_args():
+    parser = argparse.ArgumentParser(description='input names and values of hyperparameters to vary')
+    parser.add_argument('-a', '--algorithm', choices = ['A2C', 'PPO', 'SAC', 'DQN'], help='StableBaselines3 RL algorithms to run')
+    parser.add_argument('-e', '--env', default='HumanoidBulletEnv-ST-v0', help='environment to evaluate the algorithm')
+    parser.add_argument('-p', '--param-to-vary', action='append',
+            help='names of hyperparameter(s) to be varied', required=True)
+    parser.add_argument('-v', '--values', required=True, nargs='+', action='append',
+            help='values of the varying hyperparameter(s)')
+    parser.add_argument('-o', '--outputdir', help='directory to store training output')
+    parser.add_argument('-r', '--random', action='store_true', help='random search instead of Cartesian product')
 
-# function for running training + evaluating + storing output for each configuration (move code from June6 here)
+    args = parser.parse_args()
+  
+    if len(args.values) != len(args.param_to_vary):
+        raise(Exception('Number of hyperparameters does not match number of value ranges'))
 
+    if not args.random:
+        params_list = [args.values[param] for param in args.param_to_vary]
+        # params_list is of the form [ [p1v1, p1v2, ...], [p2v1, p2v2, ...], ... ]
+        configs_set = itertools.product(*params_list)
+        # configs_set is the Cartesian product of all param values [ [p1vi, p2vj, p3vk, ...] ]
+
+    return args, configs_set
+
+
+# function for running training + evaluating + SAVING output for each configuration (move code from June6 here)
+# input configs_set
+# note that there are also hyperparameters for the function that evaluates each hyperparameter configuration
+
+# to learn: multiprocessing and dill.dump
+
+if __name__ == "__main__":
+    
+    args, configs_set = parse_hp_args()
+
+    env = gym.make(str(args.env))
+
+    
