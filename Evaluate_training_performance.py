@@ -147,7 +147,7 @@ def parse_hp_args():
         #params_list = [args.values[param] for param in args.param_to_vary]
         params_list = [args.values[param] for param in range(len(args.param_to_vary))]
         # params_list is of the form [ [p1v1, p1v2, ...], [p2v1, p2v2, ...], ... ]
-        configs_set = itertools.product(*params_list)
+        configs_set = list(itertools.product(*params_list))
         # configs_set is the Cartesian product of all param values [ [p1vi, p2vj, p3vk, ...] ]
 
     return args, configs_set
@@ -157,19 +157,20 @@ def parse_hp_args():
 # input configs_set
 # note that there are also hyperparameters for the function that evaluates each hyperparameter configuration
 
-def train_and_evaluate(args, config, trial_id):
+def train_and_evaluate(args, config, trial_id, n_iterations = 100, learning_steps = 1000, eval_episodes = 10):
 
     # initialize environment and RL algorithm
     env = gym.make(str(args.env))
-    model = eval(args.algorithm)('MlpPolicy', env, verbose = 1) 
-    #TODO: change hyperparams according to config
+    # to specify the hyperparameters, make a dictionary of the form {'param_to_vary':value} as **kwargs
+    config_values = [eval(config_item) for config_item in config]
+    args_dict = dict(zip(args.param_to_vary, config_values))
+    model = eval(args.algorithm)('MlpPolicy', env, **args_dict)
 
-    # number of training-evaluation iterations
-    n_iterations = 100
-    # how many steps to run the learning
-    learning_steps = 1000
-    # how many episodes to run when evaluating a trained algo
-    eval_episodes = 10
+    """
+    n_iterations: number of training-evaluation iterations
+    learning_steps: how many steps to run the learning
+    eval_episodes: how many episodes to run when evaluating a trained algo
+    """
 
     rewards = np.zeros((n_iterations, 2))
     infos = []
@@ -193,7 +194,7 @@ def train_and_evaluate(args, config, trial_id):
         
         rewards[n_iter] = np.array([reward_mean, reward_std])
         infos.append([episode_infos_mean, episode_infos_std])
-        wandb.log({'main_reward': reward_mean, 'right_knee': episode_infos_mean[0], 'left knee': episode_infos_mean[1]})
+        #wandb.log({'main_reward': reward_mean, 'right_knee': episode_infos_mean[0], 'left knee': episode_infos_mean[1]})
         
         dill.dump(episode_rewards, open(main_save_dir+'/'+str(n_iter)+'_rewards', 'wb'))
 
@@ -206,7 +207,7 @@ def train_and_evaluate(args, config, trial_id):
     # later, write plotting code that recovers data through dill.load()
 
 
-# to learn: multiprocessing and dill.dump
+# to learn: multiprocessing 
 
 if __name__ == "__main__":
     
@@ -215,7 +216,7 @@ if __name__ == "__main__":
     env = gym.make(str(args.env))
 
     print(configs_set)
-    #TODO: itertools.product object, not a set; generator?
+    print(args.param_to_vary)
 
     for config in configs_set:
 
@@ -223,3 +224,4 @@ if __name__ == "__main__":
         print("Using Trial ID: {}".format(trial_id))
 
         # call train_and_evaluate using the specific config
+        train_and_evaluate(args, config, trial_id, n_iterations=1)
