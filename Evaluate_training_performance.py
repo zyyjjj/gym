@@ -9,9 +9,14 @@ __all__ = ["Monitor", "ResultsWriter", "get_monitor_files", "load_results"]
 
 import csv
 import json
-import os
+import os, sys
 from glob import glob
 from typing import Dict, List, Optional, Tuple, Union, Callable
+
+sys.path.append('~/.local/lib/python3.7/site-packages')
+import pybullet_envs
+import dill
+import wandb
 
 import gym
 import numpy as np
@@ -104,6 +109,7 @@ def evaluate_policy(
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
         episode_infos.append(episode_info)
+
                 
     mean_reward = np.mean(episode_rewards)
     std_reward = np.std(episode_rewards)
@@ -120,20 +126,26 @@ def parse_hp_args():
     parser = argparse.ArgumentParser(description='input names and values of hyperparameters to vary')
     parser.add_argument('-a', '--algorithm', choices = ['A2C', 'PPO', 'SAC', 'DQN'], help='StableBaselines3 RL algorithms to run')
     parser.add_argument('-e', '--env', default='HumanoidBulletEnv-ST-v0', help='environment to evaluate the algorithm')
-    parser.add_argument('-p', '--param-to-vary', action='append',
+    parser.add_argument('-p', '--param-to-vary', action='append', 
             help='names of hyperparameter(s) to be varied', required=True)
     parser.add_argument('-v', '--values', required=True, nargs='+', action='append',
             help='values of the varying hyperparameter(s)')
-    parser.add_argument('-o', '--outputdir', help='directory to store training output')
+    parser.add_argument('-o', '--outputdir', help='directory to store output')
     parser.add_argument('-r', '--random', action='store_true', help='random search instead of Cartesian product')
 
     args = parser.parse_args()
+
+    print(args.param_to_vary)
+    param_to_vary = args.param_to_vary[0]
+    print(param_to_vary)
+    print(args.values)
   
     if len(args.values) != len(args.param_to_vary):
         raise(Exception('Number of hyperparameters does not match number of value ranges'))
 
     if not args.random:
-        params_list = [args.values[param] for param in args.param_to_vary]
+        #params_list = [args.values[param] for param in args.param_to_vary]
+        params_list = [args.values[param] for param in range(len(args.param_to_vary))]
         # params_list is of the form [ [p1v1, p1v2, ...], [p2v1, p2v2, ...], ... ]
         configs_set = itertools.product(*params_list)
         # configs_set is the Cartesian product of all param values [ [p1vi, p2vj, p3vk, ...] ]
@@ -145,6 +157,55 @@ def parse_hp_args():
 # input configs_set
 # note that there are also hyperparameters for the function that evaluates each hyperparameter configuration
 
+def train_and_evaluate(args, config, trial_id):
+
+    # initialize environment and RL algorithm
+    env = gym.make(str(args.env))
+    model = eval(args.algorithm)('MlpPolicy', env, verbose = 1) 
+    #TODO: change hyperparams according to config
+
+    # number of training-evaluation iterations
+    n_iterations = 100
+    # how many steps to run the learning
+    learning_steps = 1000
+    # how many episodes to run when evaluating a trained algo
+    eval_episodes = 10
+
+    rewards = np.zeros((n_iterations, 2))
+    infos = []
+
+    main_save_dir = args.outputdir+'/'+trial_id
+    os.mkdir(main_save_dir)
+    print("Output directory {} created".format(main_save_dir))
+
+    for n_iter in range(n_iterations):
+        print('iteration {} started'.format(n_iter))
+        model.learn(total_timesteps = learning_steps)
+        print('iteration {} learning completed'.format(n_iter))
+        episode_rewards, _, episode_infos, info_names = \
+            evaluate_policy(model, env, 
+                            n_eval_episodes = eval_episodes, 
+                            return_episode_rewards = True)
+
+        reward_mean, reward_std = np.mean(episode_rewards), np.std(episode_rewards)
+        episode_infos_array = np.stack(episode_infos)
+        episode_infos_mean, episode_infos_std = np.mean(episode_infos_array, axis=0), np.std(episode_infos_array, axis=0)
+        
+        rewards[n_iter] = np.array([reward_mean, reward_std])
+        infos.append([episode_infos_mean, episode_infos_std])
+        wandb.log({'main_reward': reward_mean, 'right_knee': episode_infos_mean[0], 'left knee': episode_infos_mean[1]})
+        
+        dill.dump(episode_rewards, open(main_save_dir+'/'+str(n_iter)+'_rewards', 'wb'))
+
+        # TODO: have the directory name / file name reflect the config
+
+
+    # save output
+    # dill.dump(the_object_to_be_saved, save_dir)
+    #dill.dump(sim_params, open("{}/sim_params.dill".format(save_dir), "wb"))
+    # later, write plotting code that recovers data through dill.load()
+
+
 # to learn: multiprocessing and dill.dump
 
 if __name__ == "__main__":
@@ -153,4 +214,12 @@ if __name__ == "__main__":
 
     env = gym.make(str(args.env))
 
-    
+    print(configs_set)
+    #TODO: itertools.product object, not a set; generator?
+
+    for config in configs_set:
+
+        trial_id = str(time.time()).split('.')[0]
+        print("Using Trial ID: {}".format(trial_id))
+
+        # call train_and_evaluate using the specific config
