@@ -18,6 +18,8 @@ import pybullet_envs
 import dill
 import wandb
 
+import pdb
+
 import gym
 import numpy as np
 import pandas
@@ -25,6 +27,7 @@ import warnings
 import time
 import argparse
 import itertools
+import random
 
 from stable_baselines3.common.type_aliases import GymObs, GymStepReturn
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
@@ -88,11 +91,14 @@ def evaluate_policy(
         done, state = False, None
         episode_reward = 0.0
         episode_length = 0
-        episode_info = 0
+        episode_info = []
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
             new_obs, reward, done, _info = env.step(action)
-            episode_info.append(list(_info[0].values()))
+            if episode_length == 0:
+                info_names = list(_info.keys())
+                num_subtasks = len(list(_info.values()))
+            episode_info.append(list(_info.values())[:num_subtasks])
             if is_recurrent:
                 obs[0, :] = new_obs
             else:
@@ -105,10 +111,15 @@ def evaluate_policy(
                 env.render()
             
             done = bool(episode_length > sim_steps_upper_bound)
-        info_names = list(_info.keys())
+        
+        #pdb.set_trace()
+        
+        # info_names = list(_info.keys())
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
-        episode_infos.append(episode_info)
+        #episode_infos.append(episode_info)
+        episode_infos.append(np.sum(np.stack(episode_info)[-50:,],axis=0))
+        
 
                 
     mean_reward = np.mean(episode_rewards)
@@ -116,7 +127,7 @@ def evaluate_policy(
     if reward_threshold is not None:
         assert mean_reward > reward_threshold, "Mean reward below threshold: {:.2f} < {:.2f}".format(mean_reward, reward_threshold)
     if return_episode_rewards:
-        return episode_rewards, episode_lengths, episode_infos, info_names
+        return episode_rewards, episode_lengths, np.array(episode_infos), info_names
 
     return mean_reward, std_reward
 
@@ -131,7 +142,9 @@ def parse_hp_args():
     parser.add_argument('-v', '--values', required=True, nargs='+', action='append',
             help='values of the varying hyperparameter(s)')
     parser.add_argument('-o', '--outputdir', help='directory to store output')
-    parser.add_argument('-r', '--random', action='store_true', help='random search instead of Cartesian product')
+    parser.add_argument('-r', '--random', action='store_true', help='run random search in the given domain')
+    parser.add_argument('-l', '--lhs',  action='store_true', help='run Latin Hypercube Sampling in the given domain')
+    parser.add_argument('-n', '--num_configs', default=100, help='number of hyperparameter configurations to try')
 
     args = parser.parse_args()
 
@@ -143,12 +156,26 @@ def parse_hp_args():
     if len(args.values) != len(args.param_to_vary):
         raise(Exception('Number of hyperparameters does not match number of value ranges'))
 
-    if not args.random:
-        #params_list = [args.values[param] for param in args.param_to_vary]
-        params_list = [args.values[param] for param in range(len(args.param_to_vary))]
-        # params_list is of the form [ [p1v1, p1v2, ...], [p2v1, p2v2, ...], ... ]
-        configs_set = list(itertools.product(*params_list))
+    if args.random:
+        # random search
+        configs_set=[]
+        for i in range(int(args.num_configs)):
+            config_sample = []
+            for param in range(len(args.param_to_vary)):
+                config_sample.append(eval(random.sample(args.values[param], 1)[0]))
+                # used eval() to turn string to numerical values
+                # TODO: enable taking string values also
+            configs_set.append(config_sample)
+    elif args.lhs:
+        pass
+        # latin hypercube sampling
+    else:
+        param_values_list = [args.values[param] for param in range(len(args.param_to_vary))]
+        # param_values_list is of the form [ [p1v1, p1v2, ...], [p2v1, p2v2, ...], ... ]
+        configs_set = list(itertools.product(*param_values_list))
         # configs_set is the Cartesian product of all param values [ [p1vi, p2vj, p3vk, ...] ]
+
+    print('configs_set {}'.format(configs_set))
 
     return args, configs_set
 
@@ -162,8 +189,9 @@ def train_and_evaluate(args, config, trial_id, n_iterations = 100, learning_step
     # initialize environment and RL algorithm
     env = gym.make(str(args.env))
     # to specify the hyperparameters, make a dictionary of the form {'param_to_vary':value} as **kwargs
-    config_values = [eval(config_item) for config_item in config]
-    args_dict = dict(zip(args.param_to_vary, config_values))
+    #config_values = [eval(config_item) for config_item in config]
+    args_dict = dict(zip(args.param_to_vary, config))
+    print('args.dict {}'.format(args_dict))
     model = eval(args.algorithm)('MlpPolicy', env, **args_dict)
 
     """
@@ -176,8 +204,10 @@ def train_and_evaluate(args, config, trial_id, n_iterations = 100, learning_step
     infos = []
 
     main_save_dir = args.outputdir+'/'+trial_id
-    os.mkdir(main_save_dir)
+    #os.mkdir(main_save_dir)
+    os.makedirs(main_save_dir)
     print("Output directory {} created".format(main_save_dir))
+    dill.dump([args, config], open(main_save_dir+'/'+'args_and_configs', 'wb'))
 
     for n_iter in range(n_iterations):
         print('iteration {} started'.format(n_iter))
@@ -197,8 +227,10 @@ def train_and_evaluate(args, config, trial_id, n_iterations = 100, learning_step
         #wandb.log({'main_reward': reward_mean, 'right_knee': episode_infos_mean[0], 'left knee': episode_infos_mean[1]})
         
         dill.dump(episode_rewards, open(main_save_dir+'/'+str(n_iter)+'_rewards', 'wb'))
+        dill.dump(episode_infos, open(main_save_dir+'/'+str(n_iter)+'_infos', 'wb'))
 
         # TODO: have the directory name / file name reflect the config
+        # or save results in csv? more readable / handlable with pandas
 
 
     # save output
@@ -215,13 +247,16 @@ if __name__ == "__main__":
 
     env = gym.make(str(args.env))
 
-    print(configs_set)
-    print(args.param_to_vary)
+    trial_id_record = open(args.outputdir+'/trial_id_record_june19_50runs.txt', 'w+')
 
     for config in configs_set:
+        start_time = time.time()
 
         trial_id = str(time.time()).split('.')[0]
-        print("Using Trial ID: {}".format(trial_id))
+        print("Testing config {}, Using Trial ID: {}".format(dict(zip(args.param_to_vary, config)), trial_id))
 
-        # call train_and_evaluate using the specific config
-        train_and_evaluate(args, config, trial_id, n_iterations=1)
+        trial_id_record.write(trial_id+', '+str(dict(zip(args.param_to_vary, config)))+'\n')
+
+        train_and_evaluate(args, config, trial_id, n_iterations=100)
+
+        print("Finished running current config iteration, time taken {} s".format(time.time()-start_time))
